@@ -1,7 +1,250 @@
-import { ArrowRight, Check, Clock3, Dumbbell, Footprints, Moon, Trophy, Waves } from "lucide-react";
-import { AppShell } from "@/components/app-shell";
-import { WeeklyChart } from "@/components/charts";
-import { activity, habits, user } from "@/lib/mock-data";
-import { MetricCard, PageHeader, PrimaryButton, ProgressBar } from "@/components/ui";
-const iconMap = { dumbbell: Dumbbell, footprints: Footprints, droplets: Waves, moon: Moon, beef: Trophy, accessibility: Check };
-export default function Dashboard() { const complete = habits.filter(h => h.completed).length; return <AppShell><PageHeader eyebrow="Monday, 18 March" title={`Good evening, ${user.name}`} description="Here&apos;s how you&apos;re progressing today." action={<div className="hidden rounded-full bg-white px-4 py-2 text-xs font-semibold text-[#758078] sm:block">Week 12 · Building momentum</div>} /><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><MetricCard label="Today&apos;s Workout" value="1 scheduled" note="Push Day · 60 min" accent /><MetricCard label="Habit Completion" value={`${complete} / ${habits.length}`} note="Keep the chain alive" /><MetricCard label="Current Streak" value="5 days" note="Personal best: 12 days" /><MetricCard label="Weekly Workouts" value="4 / 5" note="One more to hit your goal" /></div><div className="mt-6 grid gap-6 xl:grid-cols-[1.15fr_.85fr]"><section className="rounded-2xl border border-[#e2e9e2] bg-white p-6"><div className="flex items-start justify-between"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-[#86a63b]">Up next</p><h2 className="mt-2 text-2xl font-semibold tracking-[-.04em]">Push Day</h2><p className="mt-1 text-sm text-[#758078]">Chest · Shoulders · Triceps</p></div><span className="grid h-11 w-11 place-items-center rounded-xl bg-[#e7f3d0] text-[#174b39]"><Dumbbell size={20} /></span></div><div className="mt-8 flex flex-wrap gap-5 text-sm text-[#758078]"><span className="flex items-center gap-2"><Clock3 size={16} /> 60 min</span><span className="flex items-center gap-2"><Dumbbell size={16} /> 6 exercises</span></div><div className="mt-7"><PrimaryButton href="/workouts/session/1">Start workout <ArrowRight size={16} /></PrimaryButton></div></section><section className="rounded-2xl border border-[#e2e9e2] bg-white p-6"><div className="flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-[#86a63b]">Today&apos;s habits</p><h2 className="mt-2 text-2xl font-semibold tracking-[-.04em]">{complete} of {habits.length} complete</h2></div><a href="/habits" className="text-xs font-semibold text-[#174b39]">See all</a></div><div className="mt-6"><ProgressBar value={(complete / habits.length) * 100} color="#86a63b" /></div><div className="mt-5 grid grid-cols-2 gap-3">{habits.slice(0, 6).map(habit => { const Icon = iconMap[habit.icon as keyof typeof iconMap] || Check; return <div key={habit.id} className="flex items-center gap-2 text-sm"><span className={`grid h-7 w-7 place-items-center rounded-full ${habit.completed ? "bg-[#e7f3d0] text-[#174b39]" : "bg-[#f1f3ef] text-[#9ca79f]"}`}>{habit.completed ? <Check size={14} /> : <Icon size={14} />}</span><span className={habit.completed ? "text-[#174b39]" : "text-[#758078]"}>{habit.name}</span></div>; })}</div></section></div><div className="mt-6 grid gap-6 lg:grid-cols-[1.1fr_.9fr]"><section className="rounded-2xl border border-[#e2e9e2] bg-white p-6"><div className="flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-[#86a63b]">This week</p><h2 className="mt-2 text-xl font-semibold">Workouts completed</h2></div><span className="text-xs text-[#758078]">4 sessions</span></div><div className="mt-6 h-48"><WeeklyChart /></div></section><section className="rounded-2xl border border-[#e2e9e2] bg-white p-6"><p className="text-xs font-bold uppercase tracking-[.18em] text-[#86a63b]">Recent activity</p><div className="mt-4 divide-y divide-[#edf1eb]">{activity.map(item => <div key={item.title} className="flex items-center gap-3 py-4 first:pt-1"><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#e7f3d0] text-[#174b39]"><Trophy size={16} /></span><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{item.title}</p><p className="mt-1 text-xs text-[#8b968e]">{item.detail}</p></div><span className="text-xs text-[#8b968e]">{item.time}</span></div>)}</div></section></div></AppShell>; }
+import {
+  ArrowRight,
+  Brain,
+  Camera,
+  Dumbbell,
+  Sparkles,
+  Utensils,
+} from "lucide-react";
+
+import Link from "next/link";
+
+import {
+  AppShell,
+} from "@/components/app-shell";
+
+const features = [
+  {
+    title:
+      "Workout Coach",
+    description:
+      "Create and complete workouts with AI-powered progression recommendations based on your training history.",
+    href:
+      "/workouts",
+    action:
+      "View workouts",
+    icon:
+      Dumbbell,
+    badge:
+      "AI progression",
+  },
+
+  {
+    title:
+      "AI Nutrition",
+    description:
+      "Upload a photo of your meal and receive an estimated calorie and macronutrient breakdown.",
+    href:
+      "/nutrition",
+    action:
+      "Analyse a meal",
+    icon:
+      Utensils,
+    badge:
+      "Multimodal AI",
+  },
+
+  {
+    title:
+      "Exercise Form Coach",
+    description:
+      "Use your camera for real-time pose tracking, automatic rep counting and exercise movement analysis.",
+    href:
+      "/form-coach",
+    action:
+      "Start form coach",
+    icon:
+      Camera,
+    badge:
+      "Computer vision",
+  },
+];
+
+export default function Dashboard() {
+  return (
+    <AppShell>
+      <div className="mx-auto max-w-6xl">
+        {/* Header */}
+        <section>
+          <p className="text-xs font-bold uppercase tracking-[.18em] text-[#86a63b]">
+            AI Fitness Coach
+          </p>
+
+          <h1 className="mt-2 max-w-3xl text-4xl font-semibold tracking-[-.06em] text-[#174b39] sm:text-5xl">
+            Train smarter with
+            your AI fitness
+            assistant.
+          </h1>
+
+          <p className="mt-4 max-w-2xl text-sm leading-6 text-[#758078] sm:text-base">
+            Plan workouts,
+            analyse meals and
+            track exercise
+            movement using AI
+            and computer vision.
+          </p>
+        </section>
+
+        {/* Main feature cards */}
+        <section className="mt-10">
+          <div className="mb-4 flex items-center gap-2">
+            <Sparkles
+              size={18}
+              className="text-[#86a63b]"
+            />
+
+            <h2 className="text-lg font-semibold text-[#174b39]">
+              What would you
+              like to do?
+            </h2>
+          </div>
+
+          <div className="grid gap-5 lg:grid-cols-3">
+            {features.map(
+              ({
+                title,
+                description,
+                href,
+                action,
+                icon: Icon,
+                badge,
+              }) => (
+                <Link
+                  href={href}
+                  key={title}
+                  className="group flex min-h-[260px] flex-col rounded-3xl border border-[#e2e9e2] bg-white p-6 transition hover:-translate-y-0.5 hover:border-[#bfd29c]"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[#e7f3d0] text-[#174b39]">
+                      <Icon
+                        size={22}
+                      />
+                    </span>
+
+                    <span className="rounded-full bg-[#f6f8f4] px-3 py-1 text-[11px] font-semibold text-[#758078]">
+                      {badge}
+                    </span>
+                  </div>
+
+                  <h3 className="mt-6 text-xl font-semibold tracking-[-.03em] text-[#174b39]">
+                    {title}
+                  </h3>
+
+                  <p className="mt-3 flex-1 text-sm leading-6 text-[#758078]">
+                    {description}
+                  </p>
+
+                  <div className="mt-6 flex items-center gap-2 text-sm font-semibold text-[#174b39]">
+                    {action}
+
+                    <ArrowRight
+                      size={16}
+                      className="transition-transform group-hover:translate-x-1"
+                    />
+                  </div>
+                </Link>
+              )
+            )}
+          </div>
+        </section>
+
+        {/* How the app connects */}
+        <section className="mt-8 rounded-3xl border border-[#e2e9e2] bg-white p-6 sm:p-8">
+          <div className="flex items-start gap-4">
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#f0f5ed] text-[#174b39]">
+              <Brain
+                size={20}
+              />
+            </span>
+
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[.18em] text-[#86a63b]">
+                Your fitness
+                workflow
+              </p>
+
+              <h2 className="mt-2 text-2xl font-semibold tracking-[-.04em] text-[#174b39]">
+                Three tools,
+                one coaching
+                experience
+              </h2>
+
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-[#758078]">
+                Use workout
+                intelligence to
+                guide training,
+                nutrition analysis
+                to understand your
+                meals, and the form
+                coach to monitor
+                movement during
+                selected exercises.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-7 grid gap-3 md:grid-cols-3">
+            <Link
+              href="/workouts"
+              className="rounded-2xl bg-[#f6f8f4] p-4 transition hover:bg-[#eef4e9]"
+            >
+              <p className="text-xs font-semibold text-[#86a63b]">
+                STEP 01
+              </p>
+
+              <p className="mt-2 font-semibold text-[#174b39]">
+                Train
+              </p>
+
+              <p className="mt-1 text-xs leading-5 text-[#758078]">
+                Follow your
+                workout and AI
+                progression
+                guidance.
+              </p>
+            </Link>
+
+            <Link
+              href="/nutrition"
+              className="rounded-2xl bg-[#f6f8f4] p-4 transition hover:bg-[#eef4e9]"
+            >
+              <p className="text-xs font-semibold text-[#86a63b]">
+                STEP 02
+              </p>
+
+              <p className="mt-2 font-semibold text-[#174b39]">
+                Fuel
+              </p>
+
+              <p className="mt-1 text-xs leading-5 text-[#758078]">
+                Analyse meals
+                using image-based
+                AI nutrition.
+              </p>
+            </Link>
+
+            <Link
+              href="/form-coach"
+              className="rounded-2xl bg-[#f6f8f4] p-4 transition hover:bg-[#eef4e9]"
+            >
+              <p className="text-xs font-semibold text-[#86a63b]">
+                STEP 03
+              </p>
+
+              <p className="mt-2 font-semibold text-[#174b39]">
+                Move
+              </p>
+
+              <p className="mt-1 text-xs leading-5 text-[#758078]">
+                Use real-time
+                pose detection
+                for supported
+                exercises.
+              </p>
+            </Link>
+          </div>
+        </section>
+      </div>
+    </AppShell>
+  );
+}

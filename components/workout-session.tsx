@@ -7,11 +7,16 @@ import {
   Clock3,
   Pause,
   Play,
+  Sparkles,
   Trophy,
 } from "lucide-react";
 
 import Link from "next/link";
-import { useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { AppShell } from "@/components/app-shell";
 import { PrimaryButton } from "@/components/ui";
@@ -44,6 +49,45 @@ type WorkoutSessionProps = {
   sessionId: string | null;
 };
 
+/*
+ * Shape of the recommendation returned
+ * by our Gemini-powered API route.
+ */
+type AIRecommendation = {
+  action:
+    | "increase_load"
+    | "increase_reps"
+    | "maintain"
+    | "reduce_load"
+    | "recover"
+    | "collect_more_data";
+
+  recommendedWeightKg: number | null;
+  recommendedReps: string | null;
+
+  confidence:
+    | "low"
+    | "medium"
+    | "high";
+
+  reason: string;
+  focus: string;
+  coachingNote: string;
+  caution: string | null;
+};
+
+/*
+ * Store both successful recommendations
+ * and rejected/warning responses.
+ *
+ * This also acts as a cache so navigating
+ * back to an exercise does not call Gemini again.
+ */
+type AIRecommendationResult = {
+  recommendation: AIRecommendation | null;
+  warning: string | null;
+};
+
 export function WorkoutSession({
   workoutPlan,
   exercises,
@@ -62,34 +106,222 @@ export function WorkoutSession({
     useState<number | null>(null);
 
   /*
-   * Store the time when this workout page first loads.
+   * AI recommendation state.
    *
-   * useRef is useful here because changing this value
-   * should not cause the component to re-render.
+   * We cache recommendations by exercise ID.
    */
-  const workoutStartedAt = useRef(Date.now());
+  const [
+    aiRecommendationsByExercise,
+    setAiRecommendationsByExercise,
+  ] = useState<
+    Record<string, AIRecommendationResult>
+  >({});
+
+  const [
+    aiLoadingExerciseId,
+    setAiLoadingExerciseId,
+  ] = useState<string | null>(null);
+
+  const [
+    aiErrorByExercise,
+    setAiErrorByExercise,
+  ] = useState<Record<string, string>>({});
+
+  /*
+   * Store the time when this workout page first loads.
+   */
+  const workoutStartedAt =
+    useRef<number | null>(null);
+
+  useEffect(() => {
+    workoutStartedAt.current =
+      Date.now();
+  }, []);
 
   /*
    * Store set data separately for every exercise.
    */
-  const [setEntriesByExercise, setSetEntriesByExercise] = useState<
-    Record<string, SetEntry[]>
-  >(() => {
-    const initialEntries: Record<string, SetEntry[]> = {};
+  const [setEntriesByExercise, setSetEntriesByExercise] =
+    useState<Record<string, SetEntry[]>>(() => {
+      const initialEntries: Record<
+        string,
+        SetEntry[]
+      > = {};
 
-    exercises.forEach((exercise) => {
-      initialEntries[exercise.id] = Array.from(
-        { length: exercise.target_sets },
-        () => ({
-          weight: "",
-          reps: "",
-          completed: false,
-        })
-      );
+      exercises.forEach((exercise) => {
+        initialEntries[exercise.id] =
+          Array.from(
+            {
+              length:
+                exercise.target_sets,
+            },
+            () => ({
+              weight: "",
+              reps: "",
+              completed: false,
+            })
+          );
+      });
+
+      return initialEntries;
     });
 
-    return initialEntries;
-  });
+  /*
+   * Work out which exercise is currently active.
+   *
+   * When current === exercises.length,
+   * the workout is complete, so there is no
+   * active exercise.
+   */
+  const activeExercise =
+    current < exercises.length
+      ? exercises[current]
+      : null;
+
+  /*
+   * --------------------------------------------------
+   * LOAD AI RECOMMENDATION
+   * --------------------------------------------------
+   *
+   * Whenever the user reaches an exercise:
+   *
+   * 1. Check whether we already loaded its recommendation
+   * 2. Call our own Next.js API route
+   * 3. The API route loads workout history
+   * 4. It calculates baseline rules
+   * 5. It calls Gemini
+   * 6. We display the result here
+   */
+  useEffect(() => {
+    if (!activeExercise) {
+      return;
+    }
+
+    const exerciseId =
+      activeExercise.id;
+
+    const exerciseName =
+      activeExercise.exercise_name;
+
+    /*
+     * Do not call the API again if this exercise
+     * already has a cached result.
+     */
+    if (
+      Object.prototype.hasOwnProperty.call(
+        aiRecommendationsByExercise,
+        exerciseId
+      )
+    ) {
+      return;
+    }
+
+    const controller =
+      new AbortController();
+
+    const loadRecommendation =
+      async () => {
+        try {
+          setAiLoadingExerciseId(
+            exerciseId
+          );
+
+          setAiErrorByExercise(
+            (currentErrors) => ({
+              ...currentErrors,
+              [exerciseId]: "",
+            })
+          );
+
+          const response =
+            await fetch(
+              "/api/ai/workout-recommendation",
+              {
+                method: "POST",
+
+                headers: {
+                  "Content-Type":
+                    "application/json",
+                },
+
+                body: JSON.stringify({
+                  exerciseName,
+                }),
+
+                signal:
+                  controller.signal,
+              }
+            );
+
+          const data =
+            await response.json();
+
+          if (!response.ok) {
+            throw new Error(
+              data.error ??
+                "Could not load AI recommendation."
+            );
+          }
+
+          setAiRecommendationsByExercise(
+            (currentRecommendations) => ({
+              ...currentRecommendations,
+
+              [exerciseId]: {
+                recommendation:
+                  data.aiRecommendation ??
+                  null,
+
+                warning:
+                  data.warning ?? null,
+              },
+            })
+          );
+        } catch (error) {
+          /*
+           * Ignore requests cancelled because
+           * the user quickly moved exercises.
+           */
+          if (
+            error instanceof DOMException &&
+            error.name === "AbortError"
+          ) {
+            return;
+          }
+
+          console.error(
+            "Failed to load AI recommendation:",
+            error
+          );
+
+          setAiErrorByExercise(
+            (currentErrors) => ({
+              ...currentErrors,
+
+              [exerciseId]:
+                "AI guidance could not be loaded.",
+            })
+          );
+        } finally {
+          setAiLoadingExerciseId(
+            (currentLoadingId) =>
+              currentLoadingId ===
+              exerciseId
+                ? null
+                : currentLoadingId
+          );
+        }
+      };
+
+    loadRecommendation();
+
+    return () => {
+      controller.abort();
+    };
+  }, [
+    activeExercise,
+    aiRecommendationsByExercise,
+  ]);
 
   /*
    * Finish the workout:
@@ -103,7 +335,9 @@ export function WorkoutSession({
    */
   const finishWorkout = async () => {
     if (!sessionId) {
-      setSaveError("Workout session could not be found.");
+      setSaveError(
+        "Workout session could not be found."
+      );
       return;
     }
 
@@ -111,40 +345,55 @@ export function WorkoutSession({
       setSaving(true);
       setSaveError("");
 
-      const supabase = createSupabaseBrowserClient();
+      const supabase =
+        createSupabaseBrowserClient();
 
-      /*
-       * Turn all exercise/set data into database rows.
-       */
-      const rows = exercises.flatMap((exercise) => {
-        const entries =
-          setEntriesByExercise[exercise.id] ?? [];
+      const rows = exercises.flatMap(
+        (exercise) => {
+          const entries =
+            setEntriesByExercise[
+              exercise.id
+            ] ?? [];
 
-        return entries.map((entry, index) => ({
-          workout_session_id: sessionId,
-          exercise_name: exercise.exercise_name,
-          set_number: index + 1,
+          return entries.map(
+            (entry, index) => ({
+              workout_session_id:
+                sessionId,
 
-          weight:
-            entry.weight === ""
-              ? null
-              : Number(entry.weight),
+              exercise_name:
+                exercise.exercise_name,
 
-          reps_performed:
-            entry.reps === ""
-              ? null
-              : Number(entry.reps),
+              set_number: index + 1,
 
-          rpe: null,
+              weight:
+                entry.weight === ""
+                  ? null
+                  : Number(
+                      entry.weight
+                    ),
 
-          completed: entry.completed,
-        }));
-      });
+              reps_performed:
+                entry.reps === ""
+                  ? null
+                  : Number(
+                      entry.reps
+                    ),
+
+              rpe: null,
+
+              completed:
+                entry.completed,
+            })
+          );
+        }
+      );
 
       /*
        * Save all performed sets.
        */
-      const { error: setsError } = await supabase
+      const {
+        error: setsError,
+      } = await supabase
         .from("session_sets")
         .insert(rows);
 
@@ -162,27 +411,35 @@ export function WorkoutSession({
       }
 
       /*
-       * Calculate how long the workout took.
-       *
-       * Date.now() gives milliseconds.
-       * Divide by 60,000 to convert to minutes.
+       * Calculate workout duration.
        */
-      const elapsedMilliseconds =
-        Date.now() - workoutStartedAt.current;
+      const startedAt =
+        workoutStartedAt.current ??
+        Date.now();
 
-      const durationMinutes = Math.max(
-        1,
-        Math.round(elapsedMilliseconds / 60000)
-      );
+      const elapsedMilliseconds =
+        Date.now() -
+        startedAt;
+
+      const durationMinutes =
+        Math.max(
+          1,
+          Math.round(
+            elapsedMilliseconds /
+              60000
+          )
+        );
 
       /*
-       * Save duration into the workout_sessions row
-       * created when the user clicked Start.
+       * Save duration.
        */
-      const { error: sessionError } = await supabase
+      const {
+        error: sessionError,
+      } = await supabase
         .from("workout_sessions")
         .update({
-          actual_duration: durationMinutes,
+          actual_duration:
+            durationMinutes,
         })
         .eq("id", sessionId);
 
@@ -201,62 +458,78 @@ export function WorkoutSession({
 
       /*
        * Calculate workout volume.
-       *
-       * Formula:
-       *
-       * Volume = Weight × Reps
-       *
-       * Example:
-       * 60 kg × 8 reps = 480 kg
-       *
-       * We only count sets marked as completed.
        */
-      const totalVolume = exercises.reduce(
-        (workoutTotal, exercise) => {
-          const entries =
-            setEntriesByExercise[exercise.id] ?? [];
+      const totalVolume =
+        exercises.reduce(
+          (
+            workoutTotal,
+            exercise
+          ) => {
+            const entries =
+              setEntriesByExercise[
+                exercise.id
+              ] ?? [];
 
-          const exerciseVolume = entries.reduce(
-            (exerciseTotal, entry) => {
-              if (!entry.completed) {
-                return exerciseTotal;
-              }
+            const exerciseVolume =
+              entries.reduce(
+                (
+                  exerciseTotal,
+                  entry
+                ) => {
+                  if (
+                    !entry.completed
+                  ) {
+                    return exerciseTotal;
+                  }
 
-              const weight = Number(entry.weight);
-              const reps = Number(entry.reps);
+                  const weight =
+                    Number(
+                      entry.weight
+                    );
 
-              if (
-                Number.isNaN(weight) ||
-                Number.isNaN(reps)
-              ) {
-                return exerciseTotal;
-              }
+                  const reps =
+                    Number(
+                      entry.reps
+                    );
 
-              return (
-                exerciseTotal +
-                weight * reps
+                  if (
+                    Number.isNaN(
+                      weight
+                    ) ||
+                    Number.isNaN(
+                      reps
+                    )
+                  ) {
+                    return exerciseTotal;
+                  }
+
+                  return (
+                    exerciseTotal +
+                    weight * reps
+                  );
+                },
+                0
               );
-            },
-            0
-          );
 
-          return workoutTotal + exerciseVolume;
-        },
-        0
+            return (
+              workoutTotal +
+              exerciseVolume
+            );
+          },
+          0
+        );
+
+      setCompletedDuration(
+        durationMinutes
       );
 
-      /*
-       * Store summary values so the completion
-       * screen can display them.
-       */
-      setCompletedDuration(durationMinutes);
-      setCompletedVolume(totalVolume);
+      setCompletedVolume(
+        totalVolume
+      );
 
-      /*
-       * Move beyond the final exercise.
-       * This triggers the completion screen.
-       */
-      setCurrent(exercises.length);
+      setCurrent(
+        exercises.length
+      );
     } catch (error) {
       console.error(
         "Unexpected workout save error:",
@@ -271,19 +544,27 @@ export function WorkoutSession({
     }
   };
 
-  const moveToPreviousExercise = () => {
-    if (current === 0) {
-      return;
-    }
+  const moveToPreviousExercise =
+    () => {
+      if (current === 0) {
+        return;
+      }
 
-    setCurrent(current - 1);
-    setSaveError("");
-  };
+      setCurrent(
+        current - 1
+      );
 
-  const moveToNextExercise = () => {
-    setCurrent(current + 1);
-    setSaveError("");
-  };
+      setSaveError("");
+    };
+
+  const moveToNextExercise =
+    () => {
+      setCurrent(
+        current + 1
+      );
+
+      setSaveError("");
+    };
 
   /*
    * No exercises in the workout.
@@ -298,7 +579,8 @@ export function WorkoutSession({
             </h1>
 
             <p className="mt-2 text-sm text-[#758078]">
-              This workout plan does not contain any exercises yet.
+              This workout plan does not
+              contain any exercises yet.
             </p>
 
             <div className="mt-5">
@@ -315,7 +597,10 @@ export function WorkoutSession({
   /*
    * Workout completion screen.
    */
-  if (current === exercises.length) {
+  if (
+    current ===
+    exercises.length
+  ) {
     return (
       <AppShell>
         <div className="mx-auto max-w-2xl py-8">
@@ -333,7 +618,8 @@ export function WorkoutSession({
             </h1>
 
             <p className="mt-2 text-[#758078]">
-              That&apos;s another one in the bank.
+              That&apos;s another one
+              in the bank.
             </p>
 
             <div className="my-9 grid grid-cols-3 gap-3 text-left">
@@ -343,7 +629,8 @@ export function WorkoutSession({
                 </p>
 
                 <p className="mt-2 text-xl font-semibold">
-                  {completedDuration !== null
+                  {completedDuration !==
+                  null
                     ? `${completedDuration} min`
                     : "—"}
                 </p>
@@ -365,18 +652,29 @@ export function WorkoutSession({
                 </p>
 
                 <p className="mt-2 text-xl font-semibold">
-                  {completedVolume !== null
+                  {completedVolume !==
+                  null
                     ? `${completedVolume.toLocaleString()} kg`
                     : "—"}
                 </p>
               </div>
             </div>
 
-            <div className="mt-8">
-              <PrimaryButton href="/workouts">
+            <div className="mt-8 flex flex-wrap justify-center gap-3">
+              <Link
+                href="/workouts"
+                className="inline-flex items-center gap-2 rounded-full bg-[#174b39] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#123d2f]"
+              >
                 Back to workouts
                 <ArrowRight size={16} />
-              </PrimaryButton>
+              </Link>
+
+              <Link
+                href="/dashboard"
+                className="inline-flex items-center gap-2 rounded-full border border-[#dfe8de] bg-white px-5 py-3 text-sm font-semibold text-[#174b39] transition hover:bg-[#f0f4ed]"
+              >
+                Back to dashboard
+              </Link>
             </div>
           </div>
         </div>
@@ -386,70 +684,118 @@ export function WorkoutSession({
 
   /*
    * Current exercise.
+   *
+   * We know it exists here because
+   * empty/completed states returned above.
    */
-  const exercise = exercises[current];
+  const exercise =
+    exercises[current];
 
   const setEntries =
-    setEntriesByExercise[exercise.id] ?? [];
+    setEntriesByExercise[
+      exercise.id
+    ] ?? [];
 
   const percent =
-    ((current + 1) / exercises.length) * 100;
+    ((current + 1) /
+      exercises.length) *
+    100;
+
+  /*
+   * Get AI state for the current exercise.
+   */
+  const aiResult =
+    aiRecommendationsByExercise[
+      exercise.id
+    ];
+
+  const aiRecommendation =
+    aiResult?.recommendation ??
+    null;
+
+  const aiWarning =
+    aiResult?.warning ?? null;
+
+  const aiError =
+    aiErrorByExercise[
+      exercise.id
+    ] ?? "";
+
+  const aiLoading =
+    aiLoadingExerciseId ===
+    exercise.id;
 
   const updateSetWeight = (
     index: number,
     value: string
   ) => {
-    setSetEntriesByExercise((currentState) => ({
-      ...currentState,
+    setSetEntriesByExercise(
+      (currentState) => ({
+        ...currentState,
 
-      [exercise.id]: currentState[
-        exercise.id
-      ].map((entry, i) =>
-        i === index
-          ? {
-              ...entry,
-              weight: value,
-            }
-          : entry
-      ),
-    }));
+        [exercise.id]:
+          currentState[
+            exercise.id
+          ].map(
+            (entry, i) =>
+              i === index
+                ? {
+                    ...entry,
+                    weight:
+                      value,
+                  }
+                : entry
+          ),
+      })
+    );
   };
 
   const updateSetReps = (
     index: number,
     value: string
   ) => {
-    setSetEntriesByExercise((currentState) => ({
-      ...currentState,
+    setSetEntriesByExercise(
+      (currentState) => ({
+        ...currentState,
 
-      [exercise.id]: currentState[
-        exercise.id
-      ].map((entry, i) =>
-        i === index
-          ? {
-              ...entry,
-              reps: value,
-            }
-          : entry
-      ),
-    }));
+        [exercise.id]:
+          currentState[
+            exercise.id
+          ].map(
+            (entry, i) =>
+              i === index
+                ? {
+                    ...entry,
+                    reps: value,
+                  }
+                : entry
+          ),
+      })
+    );
   };
 
-  const toggleSet = (index: number) => {
-    setSetEntriesByExercise((currentState) => ({
-      ...currentState,
+  const toggleSet = (
+    index: number
+  ) => {
+    setSetEntriesByExercise(
+      (currentState) => ({
+        ...currentState,
 
-      [exercise.id]: currentState[
-        exercise.id
-      ].map((entry, i) =>
-        i === index
-          ? {
-              ...entry,
-              completed: !entry.completed,
-            }
-          : entry
-      ),
-    }));
+        [exercise.id]:
+          currentState[
+            exercise.id
+          ].map(
+            (entry, i) =>
+              i === index
+                ? {
+                    ...entry,
+                    completed:
+                      !entry.completed,
+                  }
+                : entry
+          ),
+      })
+    );
   };
 
   return (
@@ -477,13 +823,19 @@ export function WorkoutSession({
               Exercise {current + 1} of{" "}
               {exercises.length}
               {" · "}
-              Target {exercise.target_sets} ×{" "}
+              Target{" "}
+              {exercise.target_sets} ×{" "}
               {exercise.target_reps}
             </p>
 
-            {exercise.rest_seconds !== null && (
+            {exercise.rest_seconds !==
+              null && (
               <p className="mt-1 text-xs text-[#8b968e]">
-                Rest: {exercise.rest_seconds} seconds
+                Rest:{" "}
+                {
+                  exercise.rest_seconds
+                }{" "}
+                seconds
               </p>
             )}
 
@@ -496,7 +848,9 @@ export function WorkoutSession({
 
           <button
             type="button"
-            onClick={() => setRunning(!running)}
+            onClick={() =>
+              setRunning(!running)
+            }
             className="flex w-fit items-center gap-2 rounded-full border border-[#d9e3d8] bg-white px-4 py-3 text-sm font-semibold text-[#174b39]"
           >
             <Clock3 size={16} />
@@ -520,6 +874,135 @@ export function WorkoutSession({
           />
         </div>
 
+        {/*
+         * ---------------------------------------------
+         * AI COACHING CARD
+         * ---------------------------------------------
+         */}
+        <section className="mt-8 rounded-2xl border border-[#dfe8de] bg-[#f8fbf4] p-5">
+          <div className="flex items-center gap-2">
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-[#e7f3d0] text-[#174b39]">
+              <Sparkles size={17} />
+            </span>
+
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[.16em] text-[#86a63b]">
+                AI Coach
+              </p>
+
+              <h2 className="text-base font-semibold text-[#174b39]">
+                Next-session guidance
+              </h2>
+            </div>
+          </div>
+
+          {aiLoading && (
+            <p className="mt-4 text-sm text-[#758078]">
+              Analysing your recent
+              performance...
+            </p>
+          )}
+
+          {!aiLoading &&
+            aiRecommendation && (
+              <div className="mt-5">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-xl bg-white p-4">
+                    <p className="text-xs text-[#8b968e]">
+                      Action
+                    </p>
+
+                    <p className="mt-1 font-semibold capitalize text-[#174b39]">
+                      {aiRecommendation.action.replaceAll(
+                        "_",
+                        " "
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-white p-4">
+                    <p className="text-xs text-[#8b968e]">
+                      Weight
+                    </p>
+
+                    <p className="mt-1 font-semibold text-[#174b39]">
+                      {aiRecommendation.recommendedWeightKg !==
+                      null
+                        ? `${aiRecommendation.recommendedWeightKg} kg`
+                        : "—"}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-white p-4">
+                    <p className="text-xs text-[#8b968e]">
+                      Rep target
+                    </p>
+
+                    <p className="mt-1 font-semibold text-[#174b39]">
+                      {aiRecommendation.recommendedReps ??
+                        "—"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 space-y-3 text-sm">
+                  <div>
+                    <p className="font-semibold text-[#174b39]">
+                      Focus
+                    </p>
+
+                    <p className="mt-1 text-[#5f6c63]">
+                      {
+                        aiRecommendation.focus
+                      }
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="font-semibold text-[#174b39]">
+                      Coaching note
+                    </p>
+
+                    <p className="mt-1 text-[#5f6c63]">
+                      {
+                        aiRecommendation.coachingNote
+                      }
+                    </p>
+                  </div>
+
+                  <p className="text-xs text-[#8b968e]">
+                    Confidence:{" "}
+                    {
+                      aiRecommendation.confidence
+                    }
+                  </p>
+
+                  {aiRecommendation.caution && (
+                    <p className="rounded-lg bg-white p-3 text-xs text-[#758078]">
+                      {
+                        aiRecommendation.caution
+                      }
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+          {!aiLoading &&
+            aiWarning && (
+              <p className="mt-4 text-sm text-[#758078]">
+                {aiWarning}
+              </p>
+            )}
+
+          {!aiLoading &&
+            aiError && (
+              <p className="mt-4 text-sm font-medium text-red-600">
+                {aiError}
+              </p>
+            )}
+        </section>
+
         <section className="mt-8 overflow-hidden rounded-2xl border border-[#e2e9e2] bg-white">
           <div className="grid grid-cols-[50px_1fr_1fr_80px_60px] border-b border-[#edf1eb] bg-[#fbfcfa] px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-[#8b968e]">
             <span>Set</span>
@@ -529,69 +1012,90 @@ export function WorkoutSession({
             <span>Done</span>
           </div>
 
-          {setEntries.map((entry, index) => (
-            <div
-              key={`${exercise.id}-${index}`}
-              className="grid grid-cols-[50px_1fr_1fr_80px_60px] items-center border-b border-[#edf1eb] px-4 py-4 text-sm last:border-0"
-            >
-              <span className="font-semibold">
-                {index + 1}
-              </span>
-
-              <span className="text-[#758078]">
-                —
-              </span>
-
-              <input
-                type="number"
-                min="0"
-                step="0.5"
-                value={entry.weight}
-                onChange={(event) =>
-                  updateSetWeight(
-                    index,
-                    event.target.value
-                  )
-                }
-                placeholder="kg"
-                className="mr-3 min-w-0 rounded-lg border border-[#dfe8de] px-2 py-2 text-sm outline-none focus:border-[#174b39]"
-              />
-
-              <input
-                type="number"
-                min="0"
-                value={entry.reps}
-                onChange={(event) =>
-                  updateSetReps(
-                    index,
-                    event.target.value
-                  )
-                }
-                placeholder="Reps"
-                className="mr-3 min-w-0 rounded-lg border border-[#dfe8de] px-2 py-2 text-sm outline-none focus:border-[#174b39]"
-              />
-
-              <button
-                type="button"
-                onClick={() => toggleSet(index)}
-                className={`grid h-7 w-7 place-items-center rounded-full border ${
-                  entry.completed
-                    ? "border-[#174b39] bg-[#174b39] text-white"
-                    : "border-[#dfe8de] text-transparent"
-                }`}
-                aria-label={`Complete set ${index + 1}`}
+          {setEntries.map(
+            (entry, index) => (
+              <div
+                key={`${exercise.id}-${index}`}
+                className="grid grid-cols-[50px_1fr_1fr_80px_60px] items-center border-b border-[#edf1eb] px-4 py-4 text-sm last:border-0"
               >
-                <Check size={14} />
-              </button>
-            </div>
-          ))}
+                <span className="font-semibold">
+                  {index + 1}
+                </span>
+
+                <span className="text-[#758078]">
+                  —
+                </span>
+
+                <input
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  value={
+                    entry.weight
+                  }
+                  onChange={(
+                    event
+                  ) =>
+                    updateSetWeight(
+                      index,
+                      event.target
+                        .value
+                    )
+                  }
+                  placeholder="kg"
+                  className="mr-3 min-w-0 rounded-lg border border-[#dfe8de] px-2 py-2 text-sm outline-none focus:border-[#174b39]"
+                />
+
+                <input
+                  type="number"
+                  min="0"
+                  value={entry.reps}
+                  onChange={(
+                    event
+                  ) =>
+                    updateSetReps(
+                      index,
+                      event.target
+                        .value
+                    )
+                  }
+                  placeholder="Reps"
+                  className="mr-3 min-w-0 rounded-lg border border-[#dfe8de] px-2 py-2 text-sm outline-none focus:border-[#174b39]"
+                />
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    toggleSet(index)
+                  }
+                  className={`grid h-7 w-7 place-items-center rounded-full border ${
+                    entry.completed
+                      ? "border-[#174b39] bg-[#174b39] text-white"
+                      : "border-[#dfe8de] text-transparent"
+                  }`}
+                  aria-label={`Complete set ${
+                    index + 1
+                  }`}
+                >
+                  <Check
+                    size={14}
+                  />
+                </button>
+              </div>
+            )
+          )}
         </section>
 
         <div className="mt-7 flex items-center justify-between">
           <button
             type="button"
-            disabled={current === 0 || saving}
-            onClick={moveToPreviousExercise}
+            disabled={
+              current === 0 ||
+              saving
+            }
+            onClick={
+              moveToPreviousExercise
+            }
             className="flex items-center gap-2 text-sm font-semibold text-[#758078] disabled:opacity-30"
           >
             <ArrowLeft size={16} />
@@ -616,11 +1120,14 @@ export function WorkoutSession({
             {saving
               ? "Saving..."
               : current ===
-                  exercises.length - 1
+                  exercises.length -
+                    1
                 ? "Finish workout"
                 : "Next exercise"}
 
-            <ArrowRight size={16} />
+            <ArrowRight
+              size={16}
+            />
           </button>
         </div>
 
